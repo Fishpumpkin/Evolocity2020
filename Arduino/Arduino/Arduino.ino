@@ -5,12 +5,15 @@
 */
 
 #include <kissStepper.h>
-#include <chrono>
 
 #define swStrL 5
 #define swStrR 6
 
 kissStepper steerStp(2, 3, 4);
+
+// global vars for steering position;
+int trim = 0;
+int currentPos = 0;
 
 // the setup function runs once when you press reset or power the board
 void setup() {
@@ -23,8 +26,8 @@ void loop() {
 	
 }
 
-void calibrateSteering() {
-	int currentStp = 0;
+int calibrateSteering() {
+	
 	int stpL = 0;
 	int stpR = 0;
 
@@ -55,4 +58,22 @@ void calibrateSteering() {
 			steerStp.move();
 		}
 	}
+
+	currentPos = ((stpR + stpL) / 2);
+	steerStp.setPos(currentPos);
+
+	steerStp.prepareMove(0 + trim);
+
+	while (true) {
+		if (digitalRead(swStrR) || digitalRead(swStrL)) {
+			steerStp.stop();
+			break;
+		}
+		if (steerStp.getDistRemaining() == 0) {
+			return(0);
+		}
+		else {
+			steerStp.move();
+		}
+	return(1);
 }
