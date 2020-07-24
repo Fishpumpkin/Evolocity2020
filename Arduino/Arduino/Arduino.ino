@@ -13,7 +13,7 @@
 
 #define swStrL 7
 #define swStrR 8
-#define steerPot A0
+#define throPot A0
 
 kissStepper steerStp(4, 5, 6);
 
@@ -22,8 +22,10 @@ Encoder steerEnc (2 , 3);
 // global vars for steering position
 int trim = 0;
 int currentPos = 0;
+int rackWidth = 2000;
 
 // global vars for encoder
+long int encPosition = 0;
 long int encOldPosition = 0;
 float nrmEncPos = 0;
 
@@ -38,7 +40,7 @@ void setup() {
 
 // the loop function runs over and over again until power down or reset
 void loop() {
-	
+	useSteering();
 }
 
 // this function finds the center of the steering space
@@ -95,15 +97,36 @@ int calibrateSteering() {
 	}
 }
 
-int useSteering() {
-	
-}
-
-void getSteerWhlPos() {
-	long int encPosition = steerEnc.read();
+// sets stepper position based on steering wheel position
+void useSteering() {
+	// get steering wheel position
+	encPosition = steerEnc.read();
 	if (encPosition != encOldPosition) {
+		// run when steering wheel pos changes
 		encOldPosition = encPosition;
 		nrmEncPos = (encPosition / 300.0);
 		Serial.println(nrmEncPos);
+
+		steerStp.stop();
 	}
+
+	// if the linear rail hits a contact switch and still has distance to go,
+	// cull any movement in that direction
+	// else operate normally
+	if (digitalRead(swStrR) || digitalRead(swStrL)) {
+		if (steerStp.getPos() - steerStp.getTarget() > 0) {
+			steerStp.prepareMove(steerStp.getPos() + 2);
+		}
+		else if (steerStp.getTarget() - steerStp.getPos() > 0) {
+			steerStp.prepareMove(steerStp.getPos() - 2);
+		}
+		else {
+			steerStp.prepareMove(pow(nrmEncPos, 3) * rackWidth);
+		}
+	}
+	else {
+		steerStp.prepareMove(pow(nrmEncPos, 3) * rackWidth);
+	}
+
+	steerStp.move();
 }
