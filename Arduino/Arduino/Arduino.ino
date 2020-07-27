@@ -11,31 +11,42 @@
 #include <Encoder.h>
 #include <kissStepper.h>
 
-#define swStrL 7
-#define swStrR 8
-#define throPot A0
+#define swStrL A0
+#define swStrR A1
 
-kissStepper steerStp(4, 5, 6);
-
+kissStepper steerStp(5, 4, 6);
 Encoder steerEnc (2 , 3);
 
 // global vars for steering position
-int trim = 0;
+const int trim = 0;
 int currentPos = 0;
-int rackWidth = 2000;
+const int rackWidth = 2000;
+int limLstate = 0;
+int limRstate = 0;
+/*const int swStrL = 97;
+const int swStrR = 96;*/
 
 // global vars for encoder
 long int encPosition = 0;
 long int encOldPosition = 0;
 float nrmEncPos = 0;
+const int encoderSens = 900;
 
 // the setup function runs once when you press reset or power the board
 void setup() {
+	pinMode(swStrL, INPUT);
+	pinMode(swStrL, INPUT);
+	pinMode(13, OUTPUT);
+
+	ADCSRA = (ADCSRA & 0xf8) | 0x04;
+
 	Serial.begin(115200);
 	steerStp.begin();
-	steerStp.setAccel(100);
+	steerStp.setAccel(30000);
 	calibrateSteering();
 	steerEnc.write(0);
+	steerStp.setMaxSpeed(12000);
+	Serial.println("setup complete");
 }
 
 // the loop function runs over and over again until power down or reset
@@ -48,15 +59,15 @@ int calibrateSteering() {
 
 	int stpL = 0;
 	int stpR = 0;
-
-	steerStp.prepareMove(-1500);
-	steerStp.setMaxSpeed(500);
+	
+	steerStp.setMaxSpeed(5000);
+	steerStp.prepareMove(-20000);
 
 	while (true) {
-		if (digitalRead(swStrL)) {
+		limLstate = analogRead(swStrL);
+		if (limLstate > 1000) {
 			steerStp.stop();
 			stpL = steerStp.getPos();
-			steerStp.setPos(0);
 			break;
 		}
 		else {
@@ -64,10 +75,11 @@ int calibrateSteering() {
 		}
 	}
 
-	steerStp.prepareMove(2500);
+	steerStp.prepareMove(30000);
 
 	while (true) {
-		if (digitalRead(swStrR)) {
+		limRstate = analogRead(swStrR);
+		if (limRstate > 1000) {
 			steerStp.stop();
 			stpR = steerStp.getPos();
 			break;
@@ -77,15 +89,17 @@ int calibrateSteering() {
 		}
 	}
 
-	currentPos = ((stpR + stpL) / 2);
+	currentPos = ((stpR - stpL) / 2);
 	steerStp.setPos(currentPos);
 
-	steerStp.prepareMove(0 + trim);
+	steerStp.prepareMove(trim);
 
 	while (true) {
-		if (digitalRead(swStrR) || digitalRead(swStrL)) {
+		limLstate = analogRead(swStrL);
+		limRstate = analogRead(swStrR);
+		if (limRstate > 1000 || limLstate > 1000) {
 			steerStp.stop();
-			break;
+			return(1);
 		}
 		if (steerStp.getDistRemaining() == 0) {
 			return(0);
@@ -93,7 +107,6 @@ int calibrateSteering() {
 		else {
 			steerStp.move();
 		}
-		return(1);
 	}
 }
 
@@ -101,11 +114,20 @@ int calibrateSteering() {
 void useSteering() {
 	// get steering wheel position
 	encPosition = steerEnc.read();
+
+	limLstate = analogRead(swStrL);
+	limRstate = analogRead(swStrR);
+
 	if (encPosition != encOldPosition) {
 		// run when steering wheel pos changes
+		if (encPosition > encoderSens) {
+			encPosition = encoderSens;
+		}
+		else if (encPosition < -encoderSens) {
+			encPosition = -encoderSens;
+		}
 		encOldPosition = encPosition;
-		nrmEncPos = (encPosition / 300.0);
-		Serial.println(nrmEncPos);
+		nrmEncPos = (encPosition / (float)encoderSens);
 
 		steerStp.stop();
 	}
@@ -113,19 +135,17 @@ void useSteering() {
 	// if the linear rail hits a contact switch and still has distance to go,
 	// cull any movement in that direction
 	// else operate normally
-	if (digitalRead(swStrR) || digitalRead(swStrL)) {
-		if (steerStp.getPos() - steerStp.getTarget() > 0) {
-			steerStp.prepareMove(steerStp.getPos() + 2);
-		}
-		else if (steerStp.getTarget() - steerStp.getPos() > 0) {
-			steerStp.prepareMove(steerStp.getPos() - 2);
+
+	if (limRstate > 1000) {
+		if (steerStp.getDistRemaining() > 0) {
+			steerStp.prepareMove(steerStp.getPos());
 		}
 		else {
-			steerStp.prepareMove(pow(nrmEncPos, 3) * rackWidth);
+			steerStp.prepareMove(nrmEncPos * rackWidth);
 		}
 	}
 	else {
-		steerStp.prepareMove(pow(nrmEncPos, 3) * rackWidth);
+		steerStp.prepareMove(nrmEncPos * rackWidth);
 	}
 
 	steerStp.move();
