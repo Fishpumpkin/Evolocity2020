@@ -28,9 +28,9 @@ const int swStrR = 96;*/
 
 // global vars for encoder
 long int encPosition = 0;
-long int encOldPosition = 0;
 float nrmEncPos = 0;
 const int encoderSens = 900;
+long int lastMicros = 0;
 
 // the setup function runs once when you press reset or power the board
 void setup() {
@@ -68,6 +68,7 @@ int calibrateSteering() {
 		if (limLstate > 1000) {
 			steerStp.stop();
 			stpL = steerStp.getPos();
+			steerStp.setReverseLimit(stpL);
 			break;
 		}
 		else {
@@ -82,6 +83,7 @@ int calibrateSteering() {
 		if (limRstate > 1000) {
 			steerStp.stop();
 			stpR = steerStp.getPos();
+			steerStp.setForwardLimit(stpR);
 			break;
 		}
 		else {
@@ -112,40 +114,33 @@ int calibrateSteering() {
 
 // sets stepper position based on steering wheel position
 void useSteering() {
-	// get steering wheel position
-	encPosition = steerEnc.read();
 
-	limLstate = analogRead(swStrL);
-	limRstate = analogRead(swStrR);
+	if ((micros() - lastMicros) >= 1000) {
+		lastMicros = micros();
+		limLstate = analogRead(swStrL);
+		limRstate = analogRead(swStrR);
 
-	if (encPosition != encOldPosition) {
-		// run when steering wheel pos changes
+		encPosition = steerEnc.read();
+
 		if (encPosition > encoderSens) {
 			encPosition = encoderSens;
 		}
 		else if (encPosition < -encoderSens) {
 			encPosition = -encoderSens;
 		}
-		encOldPosition = encPosition;
 		nrmEncPos = (encPosition / (float)encoderSens);
 
 		steerStp.stop();
-	}
 
-	// if the linear rail hits a contact switch and still has distance to go,
-	// cull any movement in that direction
-	// else operate normally
-
-	if (limRstate > 1000) {
-		if (steerStp.getDistRemaining() > 0) {
+		if (limRstate > 1000 && steerStp.getDistRemaining() > 0) {
+			steerStp.prepareMove(steerStp.getPos());
+		}
+		else if (limLstate > 1000 && steerStp.getDistRemaining() < 0) {
 			steerStp.prepareMove(steerStp.getPos());
 		}
 		else {
 			steerStp.prepareMove(nrmEncPos * rackWidth);
 		}
-	}
-	else {
-		steerStp.prepareMove(nrmEncPos * rackWidth);
 	}
 
 	steerStp.move();
