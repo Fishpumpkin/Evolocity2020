@@ -24,7 +24,7 @@ VescUart vesc;
 // global vars for steering position
 const int trim = 0;
 int currentPos = 0;
-const int rackWidth = 2000;
+static int rackWidth = 2000;
 int limLstate = 0;
 int limRstate = 0;
 
@@ -49,7 +49,7 @@ void setup() {
 	pinMode(swStrL, INPUT);
 	pinMode(13, OUTPUT);
 
-	ADCSRA = (ADCSRA & 0xf8) | 0x04;
+	ADCSRA = (ADCSRA & 0xf8) | 0x04; //quick analog read
 
 	Serial.begin(115200);
 	Serial1.begin(115200);
@@ -57,11 +57,11 @@ void setup() {
 	steerStp.begin();
 	steerStp.setAccel(accelAmount);
 	calibrateSteering();
-	steerEnc.write(0);
 	steerStp.setMaxSpeed(18000);
 
 	vesc.setSerialPort(&Serial1);
-
+ 
+  steerEnc.write(0);
 	Serial.println("setup complete");
 }
 
@@ -73,78 +73,64 @@ void loop() {
 
 // this function finds the center of the steering space
 int calibrateSteering() {
+  
+  int stpR = 0;
+  
+  steerStp.setMaxSpeed(5000);
+  steerStp.prepareMove(-30000);
 
-	int stpL = 0;
-	int stpR = 0;
-	
-	steerStp.setMaxSpeed(5000);
-	steerStp.prepareMove(-20000);
+  while (true) {
+    limLstate = analogRead(swStrL);
+    if (limLstate > 1000) {
+      steerStp.stop();
+      steerStp.setPos(0);
+      break;
+    }
+    else {
+      steerStp.move();
+    }
+  }
 
-	while (true) {
-		limLstate = analogRead(swStrL);
-		if (limLstate > 1000) {
-			steerStp.stop();
-			stpL = steerStp.getPos();
-			steerStp.setReverseLimit(stpL + 5);
-			break;
-		}
-		else {
-			steerStp.move();
-		}
-	}
+  steerStp.prepareMove(30000);
 
-	steerStp.prepareMove(30000);
+  while (true) {
+    limRstate = analogRead(swStrR);
+    if (limRstate > 1000) {
+      steerStp.stop();
+      stpR = steerStp.getPos();
+      break;
+    }
+    else {
+      steerStp.move();
+    }
+  }
 
-	while (true) {
-		limRstate = analogRead(swStrR);
-		if (limRstate > 1000) {
-			steerStp.stop();
-			stpR = steerStp.getPos();
-			steerStp.setForwardLimit(stpR - 5);
-			break;
-		}
-		else {
-			steerStp.move();
-		}
-	}
+  currentPos = (stpR / 2);
+  rackWidth = (stpR);
 
-	currentPos = ((stpR - stpL) / 2 + trim);
-	steerStp.setPos(currentPos);
+  steerStp.setPos(currentPos);
+  steerStp.setMaxSpeed(10000);
+  steerStp.prepareMove(0);
 
-	steerStp.prepareMove(0);
+  while (true) {
+    steerStp.move();
+    if (steerStp.getDistRemaining() == 0) {
+      break;
+    }
+  }
 
-	while (true) {
-		limLstate = analogRead(swStrL);
-		limRstate = analogRead(swStrR);
-		if (limRstate > 1000 || limLstate > 1000) {
-			steerStp.stop();
-			return(1);
-		}
-		if (steerStp.getDistRemaining() == 0) {
-			return(0);
-		}
-		else {
-			steerStp.move();
-		}
-	}
+  steerStp.setForwardLimit(rackWidth / 2);
+  steerStp.setReverseLimit(-rackWidth / 2);
 }
+
 
 // sets stepper position based on steering wheel position
 void useSteering() {
 
 	if ((micros() - lastMicros) >= 20000) { //update at 50 hz
 		lastMicros = micros();
-		limLstate = analogRead(swStrL);
-		limRstate = analogRead(swStrR);
-
 		encPosition = steerEnc.read();
-
-		if (encPosition > encoderSens) { //clamp encPosition between limits
-			encPosition = encoderSens;
-		}
-		else if (encPosition < -encoderSens) {
-			encPosition = -encoderSens;
-		}
+    
 		nrmEncPos = (encPosition / (float)encoderSens); //normalize encoder pos -1 < x < 1, over 270 deg
 
 		int absStepDiff = steerStp.getTarget() - steerStp.getPos();
