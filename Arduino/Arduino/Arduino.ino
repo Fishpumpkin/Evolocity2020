@@ -27,6 +27,9 @@ int currentPos = 0;
 const int rackWidth = 2000;
 int limLstate = 0;
 int limRstate = 0;
+
+int stpMoveState = 0; // 1 = decel 0 = norm
+int accelAmount = 60000;
 /*const int swStrL = 97;
 const int swStrR = 96;*/
 
@@ -52,7 +55,7 @@ void setup() {
 	Serial1.begin(115200);
 
 	steerStp.begin();
-	steerStp.setAccel(60000);
+	steerStp.setAccel(accelAmount);
 	calibrateSteering();
 	steerEnc.write(0);
 	steerStp.setMaxSpeed(18000);
@@ -129,30 +132,40 @@ int calibrateSteering() {
 // sets stepper position based on steering wheel position
 void useSteering() {
 
-	if ((micros() - lastMicros) >= 20000) {
+	if ((micros() - lastMicros) >= 20000) { //update at 50 hz
 		lastMicros = micros();
 		limLstate = analogRead(swStrL);
 		limRstate = analogRead(swStrR);
 
 		encPosition = steerEnc.read();
 
-		if (encPosition > encoderSens) {
+		if (encPosition > encoderSens) { //clamp encPosition between limits
 			encPosition = encoderSens;
 		}
 		else if (encPosition < -encoderSens) {
 			encPosition = -encoderSens;
 		}
-		nrmEncPos = (encPosition / (float)encoderSens);
+		nrmEncPos = (encPosition / (float)encoderSens); //normalize encoder pos -1 < x < 1, over 270 deg
 
-		steerStp.stop();
+		int absStepDiff = steerStp.getTarget() - steerStp.getPos();
 
-		if (limRstate > 1000 && steerStp.getDistRemaining() > 0) {
-			steerStp.prepareMove(steerStp.getPos());
+		if (steerStp.isMovingForwards() && absStepDiff < 0) { //stepper needs to change direction R -> L
+			stpMoveState = 1;
+			steerStp.decelerate();
 		}
-		else if (limLstate > 1000 && steerStp.getDistRemaining() < 0) {
-			steerStp.prepareMove(steerStp.getPos());
+
+		else if (!steerStp.isMovingForwards() && absStepDiff > 0) { //stepper needs to change direction L -> R
+			stpMoveState = 1;
+			steerStp.decelerate();
 		}
-		else {
+
+		else if (stpMoveState == 1 && steerStp.getDistRemaining() == 0) { //stepper is done decelerating
+			stpMoveState = 0;
+			steerStp.stop();
+			steerStp.prepareMove(nrmEncPos * rackWidth);
+		}
+
+		else { //stepper needs to continue moving
 			steerStp.prepareMove(nrmEncPos * rackWidth);
 		}
 	}
