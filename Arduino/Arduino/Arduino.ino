@@ -1,197 +1,251 @@
 /*
- Name:		Arduino.ino
- Created:	7/22/2020 12:25:23 PM
- Author:	Eragon
+  Name:		Arduino.ino
+  Created:	7/22/2020 12:25:23 PM
+  Author:	Eragon
 */
 
-#include <VescUart.h>
-#include <datatypes.h>
-#include <crc.h>
-#include <buffer.h>
 #include <Encoder.h>
 #include <kissStepper.h>
+#include <Servo.h>
 
 #define swStrL A0
 #define swStrR A1
 
-#define throPot A2
-#define brakePot A3
+#define stpAlmPin A5
+#define estopPin A7
+#define mtrSwPin A6
+
+#define vescPin 7
+#define throPot A9
+#define brakePot A8
 
 kissStepper steerStp(5, 4, 6);
-Encoder steerEnc (2 , 3);
-VescUart vesc;
+Encoder steerEnc (3 , 2);
+Servo vesc;
 
 // global vars for steering position
-const int trim = 0;
 int currentPos = 0;
-const int rackWidth = 2000;
+static int rackWidth = 0;
 int limLstate = 0;
 int limRstate = 0;
-/*const int swStrL = 97;
-const int swStrR = 96;*/
 
 // global vars for encoder
-long int encPosition = 0;
-float nrmEncPos = 0;
-const int encoderSens = 900;
+int encPosition = 0;
+float nrmEncPos = 0.0;
+const int encoderSens = 680; //full range is 940
 long int lastMicros = 0;
 
 // global vars for motor
-int maxErpm = 9900;
-int maxBrakeCurrent = 20;
+float throRange = 260;
+float brakeRange = 280;
+long int lastMicros2 = 0;
+
+// global vars for error handling
+long int lastMicros3 = 0;
+bool stpAlm = 0;
+bool estop = 0;
+bool motSw = 0;
 
 // the setup function runs once when you press reset or power the board
 void setup() {
-	pinMode(swStrL, INPUT);
-	pinMode(swStrL, INPUT);
-	pinMode(13, OUTPUT);
+  pinMode(swStrL, INPUT);
+  pinMode(swStrL, INPUT);
+  pinMode(13, OUTPUT);
+  pinMode(A12, INPUT);
+  pinMode(A13, INPUT);
 
-	ADCSRA = (ADCSRA & 0xf8) | 0x04;
+  ADCSRA = (ADCSRA & 0xf8) | 0x04;
 
-	Serial.begin(115200);
-	Serial1.begin(115200);
+  steerStp.begin();
+  calibrateSteering();
+  steerStp.setMaxSpeed(11000);
+  steerStp.setAccel(0);
 
-	steerStp.begin();
-	steerStp.setAccel(60000);
-	calibrateSteering();
-	steerEnc.write(0);
-	steerStp.setMaxSpeed(18000);
+  vesc.attach(vescPin);
+  Serial.begin(115200);
 
-	vesc.setSerialPort(&Serial1);
-
-	Serial.println("setup complete");
+  steerEnc.write(0);
+  startAll();
 }
 
 // the loop function runs over and over again until power down or reset
-void loop() {
-	useSteering();
-	useVesc();
+void loop () {
+  useSteering((steerEnc.read()/(float)encoderSens));
+  useVesc();
+  checkErrors();
 }
 
-// this function finds the center of the steering space
+// finds the center of the steering space
 int calibrateSteering() {
 
-	int stpL = 0;
-	int stpR = 0;
-	
-	steerStp.setMaxSpeed(5000);
-	steerStp.prepareMove(-20000);
+  int stpL = 0;
+  int stpR = 0;
 
-	while (true) {
-		limLstate = analogRead(swStrL);
-		if (limLstate > 1000) {
-			steerStp.stop();
-			stpL = steerStp.getPos();
-			steerStp.setReverseLimit(stpL + 5);
-			break;
-		}
-		else {
-			steerStp.move();
-		}
-	}
+  steerStp.setMaxSpeed(800);
+  steerStp.setAccel(3000);
+  steerStp.prepareMove(-30000);
 
-	steerStp.prepareMove(30000);
+  while (true) {
+    limLstate = analogRead(swStrL);
+    if (limLstate > 1000) {
+      steerStp.stop();
+      steerStp.setPos(0);
+      break;
+    }
+    else {
+      steerStp.move();
+    }
+  }
 
-	while (true) {
-		limRstate = analogRead(swStrR);
-		if (limRstate > 1000) {
-			steerStp.stop();
-			stpR = steerStp.getPos();
-			steerStp.setForwardLimit(stpR - 5);
-			break;
-		}
-		else {
-			steerStp.move();
-		}
-	}
+  steerStp.prepareMove(30000);
 
-	currentPos = ((stpR - stpL) / 2 + trim);
-	steerStp.setPos(currentPos);
+  while (true) {
+    limRstate = analogRead(swStrR);
+    if (limRstate > 1000) {
+      steerStp.stop();
+      stpR = steerStp.getPos();
+      break;
+    }
+    else {
+      steerStp.move();
+    }
+  }
 
-	steerStp.prepareMove(0);
+  currentPos = (stpR / 2);
+  rackWidth = (stpR);
 
-	while (true) {
-		limLstate = analogRead(swStrL);
-		limRstate = analogRead(swStrR);
-		if (limRstate > 1000 || limLstate > 1000) {
-			steerStp.stop();
-			return(1);
-		}
-		if (steerStp.getDistRemaining() == 0) {
-			return(0);
-		}
-		else {
-			steerStp.move();
-		}
-	}
+  steerStp.setPos(currentPos);
+  steerStp.setMaxSpeed(10000);
+  steerStp.prepareMove(0);
+
+  while (true) {
+    steerStp.move();
+    if (steerStp.getDistRemaining() == 0) {
+      break;
+    }
+  }
+
+  steerStp.setForwardLimit(rackWidth / 2);
+  steerStp.setReverseLimit(-rackWidth / 2);
 }
 
-// sets stepper position based on steering wheel position
-void useSteering() {
+// sets stepper position based on steering wheel position @100Hz
+void useSteering(float nrmPos) {
 
-	if ((micros() - lastMicros) >= 20000) {
-		lastMicros = micros();
-		limLstate = analogRead(swStrL);
-		limRstate = analogRead(swStrR);
+  if ((micros() - lastMicros) >= 10000) {
+    lastMicros = micros();
+    limLstate = analogRead(swStrL);
+    limRstate = analogRead(swStrR);
 
-		encPosition = steerEnc.read();
+    int absStepDiff = (nrmPos * (rackWidth / 2)) - steerStp.getPos();
 
-		if (encPosition > encoderSens) {
-			encPosition = encoderSens;
-		}
-		else if (encPosition < -encoderSens) {
-			encPosition = -encoderSens;
-		}
-		nrmEncPos = (encPosition / (float)encoderSens);
+    steerStp.stop();
 
-		steerStp.stop();
+    //if limit switch on, arrest movement in that direction
+    if (limRstate > 1000 && absStepDiff > 0) {
+      steerStp.prepareMove(steerStp.getPos());
+    }
+    else if (limLstate > 1000 && absStepDiff < 0) {
+      steerStp.prepareMove(steerStp.getPos());
+    }
+    else {
+      steerStp.prepareMove(nrmPos * (rackWidth / 2));
+    }
+  }
 
-		if (limRstate > 1000 && steerStp.getDistRemaining() > 0) {
-			steerStp.prepareMove(steerStp.getPos());
-		}
-		else if (limLstate > 1000 && steerStp.getDistRemaining() < 0) {
-			steerStp.prepareMove(steerStp.getPos());
-		}
-		else {
-			steerStp.prepareMove(nrmEncPos * rackWidth);
-		}
-	}
-
-	steerStp.move();
+  steerStp.move();
 }
 
 // updates the speed and braking current of motor based on pedals
 void useVesc() {
-	if ((micros() - lastMicros) >= 25000) {
-		int throValue = analogRead(throPot);
-		int brakeValue = analogRead(brakePot);
+  if ((micros() - lastMicros2) >= 20030) {
+    lastMicros2 = micros();
 
-		float normThro = (float)throValue / 1024.0;
-		float normBrake = (float)brakeValue / 1024.0;
+    int throValue = analogRead(throPot);
+    int brakeValue = analogRead(brakePot);
 
-		if (normThro > 1) {
-			normThro = 1;
-		}
-		if (normThro < 0) {
-			normThro = 0;
-		}
-		if (normBrake > 1) {
-			normBrake = 1;
-		}
-		if (normBrake < 0) {
-			normBrake = 0;
-		}
+    float normThro = ((float)throValue - 572) / throRange; // dont touch these values
+    float normBrake = ((float)brakeValue - 512) / brakeRange;
 
-		float ERPM = maxErpm * normThro;
-		float brakeCurrent = maxBrakeCurrent * normBrake;
+    // clamp norm values
+    if (normThro > 1) normThro = 1;
+    if (normThro < 0) normThro = 0;
+    if (normBrake > 1) normBrake = 1;
+    if (normBrake < 0) normBrake = 0;
 
-		if (brakeCurrent > 1) {
-			vesc.setRPM(0);
-			vesc.setBrakeCurrent(brakeCurrent);
-		}
-		else {
-			vesc.setRPM(ERPM);
-		}
+    // calc pwm output
+    if (normBrake > 0.15) {
+      int microsec = (normBrake * -500) + 1500;
+      vesc.writeMicroseconds(microsec);
+    }
+    else {
+      int microsec = (normThro * 500) + 1500;
+      vesc.writeMicroseconds(microsec);
+    }
 
-	}
+  }
+}
+
+void stopMotor() {
+  vesc.writeMicroseconds(1500);
+  vesc.detach();
+}
+
+void stopAll() {
+  stopMotor();
+  steerStp.disable();
+}
+
+void startMotor() {
+  if (!vesc.attached()) {
+    vesc.attach(vescPin);
+  }
+}
+
+void startAll() {
+  startMotor();
+  if (!steerStp.isEnabled()) {
+    steerStp.enable();
+  }
+}
+
+int checkErrors() {
+  if ((micros() - lastMicros3) >= 40020) {
+    lastMicros3 = micros();
+
+    //get switch states
+    int stps = analogRead(stpAlmPin);
+    int mtrs = analogRead(mtrSwPin);
+    int estops = analogRead(estopPin);
+
+    // if stepper alarms: normally high, open collector
+    if (stps < 100 && stpAlm == 0) {
+      stpAlm = 1;
+      stopMotor();
+      Serial.println("Stepper Alarmed");
+    }
+    // if etop depressed: normally low
+    if (estops > 1000 && estop == 0) {
+      estop = 1;
+      stopAll();
+      Serial.println("Estop depressed");
+    }
+    else if (estops < 100 && estop == 1) {
+      estop = 0;
+      startAll();
+      Serial.println("Estop released");
+    }
+
+    // motor switch: normally high
+    if (mtrs < 100 && motSw == 0) {
+      motSw = 1;
+      startMotor();
+      Serial.println("Motor On");
+    }
+    else if (mtrs > 1000 && motSw == 1) {
+      motSw = 0;
+      stopMotor();
+      Serial.println("Motor Off");
+    }
+  }
 }
